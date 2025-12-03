@@ -48,3 +48,76 @@ To run the full IVIS system on a video:
 
 ```bash
 python Code/run_ivis.py --model models/best.pt --input match_video.mp4 --mode 1
+
+--mode 1: Draws Bounding Box + Label + Confidence Source.
+
+--mode 3: Draws a minimal Circle (great for overlay graphics).
+
+--no-trail: Disables the aesthetic orange motion trail.
+```
+
+2. Dataset Creation & Labeling
+
+Create your own datasets from raw match footage using the interactive labeler. This tool includes a physics-assist mode that predicts where the box should be, speeding up your workflow.
+```bash
+python Code/Tools/create_dataset_from_video.py --video raw_match.mp4 --output-dir ./new_dataset
+```
+    Controls:
+
+        Left Click + Drag: Draw a square-locked box from the center out.
+
+        p: Toggle Physics Prediction (Let the code guess the next frame for you).
+
+        s: Save frame and advance.
+
+        d: Discard frame.
+
+3. Dataset Management
+
+    Extract from COCO: Grab thousands of "sports ball" images to bootstrap your model.
+    
+```bash
+python Code/Tools/COCOdatasetextractor.py annotations.json -t 1000 -v 200 -cat "sports ball"
+```
+Merge Datasets: Combine multiple datasets into one master set.
+```bash
+python Code/Tools/smartdatasetmerger.py --datasets data1.yaml data2.yaml --output ./merged_data
+```
+Split Data: Automatically split images into Train/Val folders.
+```bash
+
+    python Code/Tools/split_dataset.py --data-dir ./my_data --train-ratio 0.8
+```
+4. Training
+
+Train a YOLOv8 model with custom augmentation presets.
+```bash
+
+# Options: light, medium, heavy, none
+python Code/Tools/trainyolo.py --data data.yaml --model yolov8n.pt --epochs 100 --aug medium
+```
+File Structure
+
+    Code/ivis_v1.py: The core detection package containing the MomentumTracker and ColorBlobDetector classes.
+
+    Code/run_ivis.py: The video inference harness that utilizes IVIS.
+
+    Code/Tools/:
+
+        create_dataset_from_video.py: Interactive labeling tool.
+
+        trainyolo.py: Training wrapper with augmentation presets.
+
+        split_dataset.py: Utility to split raw images into Train/Val sets.
+
+        smartdatasetmerger.py: Utility to combine datasets.
+
+        COCOdatasetextractor.py: Utility to download specific classes from COCO.
+
+        yolo_test_harness_cli.py: A basic YOLO-only viewer (for comparing baseline vs IVIS).
+
+License
+
+This project is maintained by the Queensland University of Technology Volleyball Club.
+
+Happy Spiking! 🏐
