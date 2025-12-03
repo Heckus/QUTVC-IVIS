@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="
+    default-src 'self' http://localhost:3000;
+    script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net;
+    style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net;
+    img-src 'self' data: http://localhost:3000;
+    connect-src 'self' http://localhost:3000;
+  ">
+  <title>YOLOv8 Dataset Manager</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.20.15/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/fabric@5.3.0/dist/fabric.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/axios@1.4.0/dist/axios.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="main.css">
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel" data-presets="react,typescript">
+    const { useState, useEffect, useRef } = React;
+    const { createRoot } = ReactDOM;
+    
+    const IMAGES_PER_PAGE = 100;
+
+    const App = () => {
+      const [yamlPath, setYamlPath] = useState('');
+      const [imageSets, setImageSets] = useState({});
+      const [classNames, setClassNames] = useState({});
+      const [selectedSplit, setSelectedSplit] = useState('train');
+      const [viewMode, setViewMode] = useState('Annotated');
+      const [selectedImage, setSelectedImage] = useState(null);
+      const [images, setImages] = useState([]);
+      const [canvas, setCanvas] = useState(null);
+      const canvasRef = useRef(null);
+      
+      const [currentPage, setCurrentPage] = useState(1);
+      const [isLoading, setIsLoading] = useState(false);
+      
+      const [modelPath, setModelPath] = useState('');
+      const [searchImageName, setSearchImageName] = useState('');
+      const [inferenceResult, setInferenceResult] = useState(null);
+
+      const [analytics, setAnalytics] = useState(null);
+      const [isAnalyticsLoading, setIsAnalyticsLoading] = useState(false);
+      const [analyticsError, setAnalyticsError] = useState(null);
+      
+      const isDrawing = useRef(false);
+      const startX = useRef(0);
+      const startY = useRef(0);
+      const [currentClassId, setCurrentClassId] = useState(0);
+      const [isDrawingToolActive, setIsDrawingToolActive] = useState(true);
+      const [highlightedImages, setHighlightedImages] = useState([]);
+
+
+      useEffect(() => {
+        const path = prompt('Please enter the FULL, ABSOLUTE path to your data.yaml file:');
+        if (path) {
+          setYamlPath(path);
+          loadData(path);
+        }
+      }, []);
+
+      const loadData = async (path) => {
+        try {
+          const response = await axios.get(`http://localhost:3000/load-data?yamlPath=${encodeURIComponent(path)}`);
+          setImageSets(response.data.imageSets || {});
+          setClassNames(response.data.classNames || {});
+          loadAnalytics(path);
+        } catch (error) {
+          alert(`Error loading dataset: ${error.response ? error.response.data.error : error.message}`);
+        }
+      };
+
+      const loadImages = async (imagePaths) => {
+        if (!imagePaths || imagePaths.length === 0) {
+            setImages([]);
+            return;
+        };
+        setIsLoading(true);
+        try {
+          const response = await axios.post('http://localhost:3000/load-images', { paths: imagePaths, viewMode });
+          setImages(response.data);
+        } catch (error) {
+          alert(`Error loading images: ${error.response ? error.response.data.error : error.message}`);
+        } finally {
+            setIsLoading(false);
+        }
+      };
+
+      const loadAnalytics = async (path) => {
+        setIsAnalyticsLoading(true);
+        setAnalyticsError(null);
+        try {
+          const response = await axios.get(`http://localhost:3000/analytics?yamlPath=${encodeURIComponent(path)}`);
+          setAnalytics(response.data);
+        } catch (error) {
+          console.error('Error loading analytics:', error);
+          setAnalyticsError(error.response ? error.response.data.error : error.message);
+        } finally {
+          setIsAnalyticsLoading(false);
+        }
+      };
+      
+      useEffect(() => {
+        const allImagePaths = imageSets[selectedSplit] || [];
+        const startIndex = (currentPage - 1) * IMAGES_PER_PAGE;
+        const endIndex = startIndex + IMAGES_PER_PAGE;
+        const pathsToLoad = allImagePaths.slice(startIndex, endIndex);
+        if(pathsToLoad.length > 0) {
+            loadImages(pathsToLoad);
+        } else {
+            setImages([]);
+        }
+      }, [selectedSplit, viewMode, currentPage, imageSets]);
+
+      useEffect(() => { setCurrentPage(1); }, [selectedSplit, viewMode]);
+
+      useEffect(() => {
+        if (selectedImage && canvasRef.current) {
+            const img = new Image();
+            const selectedImageData = images.find(img => img.path === selectedImage);
+            if (!selectedImageData) return;
+            img.src = selectedImageData.base64;
+            
+            img.onload = async () => {
+                const canvasWidth = Math.min(img.width, 1000);
+                const aspectRatio = img.height / img.width;
+                const canvasHeight = canvasWidth * aspectRatio;
+                const fabricCanvas = new fabric.Canvas(canvasRef.current, {
+                    width: canvasWidth,
+                    height: canvasHeight,
+                    backgroundImage: new fabric.Image(img, {
+                        width: canvasWidth,
+                        height: canvasHeight
+                    })
+                });
+
+                const response = await axios.get(`http://localhost:3000/annotations?imagePath=${encodeURIComponent(selectedImage)}`);
+                const annotations = response.data;
+                annotations.forEach(ann => {
+                    const rect = new fabric.Rect({
+                        left: ann.xMin,
+                        top: ann.yMin,
+                        width: ann.xMax - ann.xMin,
+                        height: ann.yMax - ann.yMin,
+                        fill: 'rgba(244, 114, 182, 0.2)',
+                        stroke: '#f472b6',
+                        strokeWidth: 2,
+                        classId: ann.classId
+                    });
+                    fabricCanvas.add(rect);
+                });
+
+                setCanvas(fabricCanvas);
+            };
+        }
+      }, [selectedImage]);
+      
+      useEffect(() => {
+        if (!canvas) return;
+
+        canvas.off('mouse:down');
+        canvas.off('mouse:move');
+        canvas.off('mouse:up');
+        canvas.isDrawingMode = false;
+
+        if (isDrawingToolActive) {
+            const handleMouseDown = (o) => {
+                isDrawing.current = true;
+                const pointer = canvas.getPointer(o.e);
+                startX.current = pointer.x;
+                startY.current = pointer.y;
+                const rect = new fabric.Rect({
+                    left: startX.current,
+                    top: startY.current,
+                    width: 0,
+                    height: 0,
+                    fill: 'rgba(244, 114, 182, 0.2)',
+                    stroke: '#f472b6',
+                    strokeWidth: 2,
+                    classId: currentClassId
+                });
+                canvas.add(rect);
+                canvas.setActiveObject(rect);
+            };
+
+            const handleMouseMove = (o) => {
+                if (!isDrawing.current) return;
+                const pointer = canvas.getPointer(o.e);
+                const rect = canvas.getActiveObject();
+                if (!rect) return;
+                
+                rect.set({
+                    width: Math.abs(startX.current - pointer.x),
+                    height: Math.abs(startY.current - pointer.y),
+                    left: Math.min(pointer.x, startX.current),
+                    top: Math.min(pointer.y, startY.current)
+                });
+                canvas.renderAll();
+            };
+
+            const handleMouseUp = () => {
+                isDrawing.current = false;
+            };
+
+            canvas.on('mouse:down', handleMouseDown);
+            canvas.on('mouse:move', handleMouseMove);
+            canvas.on('mouse:up', handleMouseUp);
+        }
+
+        return () => {
+            canvas.off('mouse:down');
+            canvas.off('mouse:move');
+            canvas.off('mouse:up');
+        }
+      }, [canvas, currentClassId, isDrawingToolActive]);
+
+      const saveAnnotations = async () => {
+        if (canvas && selectedImage) {
+            const annotationsToSave = canvas.getObjects('rect').map(obj => {
+                const bounds = obj.getBoundingRect();
+                return {
+                    classId: obj.classId || 0, 
+                    xMin: bounds.left,
+                    yMin: bounds.top,
+                    xMax: bounds.left + bounds.width,
+                    yMax: bounds.top + bounds.height
+                };
+            });
+          
+          try {
+            await axios.post('http://localhost:3000/save-annotations', {
+              imagePath: selectedImage,
+              annotations: annotationsToSave
+            });
+            alert('Annotations saved successfully!');
+            const allImagePaths = imageSets[selectedSplit] || [];
+            const startIndex = (currentPage - 1) * IMAGES_PER_PAGE;
+            const endIndex = startIndex + IMAGES_PER_PAGE;
+            loadImages(allImagePaths.slice(startIndex, endIndex));
+          } catch (error) {
+            alert(`Error saving annotations: ${error}`);
+          }
+        }
+      };
+
+      const toggleHighlight = (imagePath) => {
+          setHighlightedImages(prev => 
+              prev.includes(imagePath) 
+                  ? prev.filter(p => p !== imagePath)
+                  : [...prev, imagePath]
+          );
+      };
+
+      const deleteHighlightedImages = async () => {
+          if (highlightedImages.length === 0) {
+              alert('No images selected for deletion.');
+              return;
+          }
+          if (confirm(`Are you sure you want to delete ${highlightedImages.length} selected image(s)?`)) {
+              try {
+                  await axios.post('http://localhost:3000/delete-images', { imagePaths: highlightedImages });
+                  alert('Selected images deleted successfully.');
+                  
+                  // Update state to reflect deletions
+                  const newImageSets = { ...imageSets };
+                  newImageSets[selectedSplit] = newImageSets[selectedSplit].filter(p => !highlightedImages.includes(p));
+                  setImageSets(newImageSets);
+                  setHighlightedImages([]);
+                  loadAnalytics(yamlPath);
+
+              } catch (error) {
+                  alert(`Error deleting images: ${error.response ? error.response.data.error : error.message}`);
+              }
+          }
+      };
+
+      const deleteSelectedAnnotation = () => {
+          if (canvas) {
+              const activeObject = canvas.getActiveObject();
+              if (activeObject) {
+                  canvas.remove(activeObject);
+              }
+          }
+      };
+
+      const runInference = async (e) => {
+          if (e.key === 'Enter') {
+              const imagePath = Object.values(imageSets).flat().find(p => p.endsWith(searchImageName));
+              if (!imagePath) {
+                  alert('Image not found in the dataset.');
+                  return;
+              }
+              if (!modelPath) {
+                  alert('Please provide a path to the model file.');
+                  return;
+              }
+              try {
+                  const response = await axios.post('http://localhost:3000/run-inference', { modelPath, imagePath });
+                  setInferenceResult(response.data.base64);
+              } catch (error) {
+                  alert(`Error running inference: ${error.response ? error.response.data.error : error.message}`);
+              }
+          }
+      };
+
+      const Pagination = ({ onTop = false }) => {
+          const totalImages = imageSets[selectedSplit] ? imageSets[selectedSplit].length : 0;
+          const totalPages = Math.ceil(totalImages / IMAGES_PER_PAGE);
+          if (totalPages <= 1) return null;
+          const positionClass = onTop ? 'mb-4' : 'mt-4';
+          return (
+              <div className={`flex justify-center items-center ${positionClass} space-x-4`}>
+                  <button onClick={() => setCurrentPage(p => Math.max(p - 1, 1))} disabled={currentPage === 1 || isLoading}>Previous</button>
+                  <span className="px-4 text-slate-300">Page {currentPage} of {totalPages}</span>
+                  <button onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))} disabled={currentPage === totalPages || isLoading}>Next</button>
+              </div>
+          )
+      }
+
+      const ImageGrid = () => (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+            {isLoading && <p className="col-span-full text-center">Loading images...</p>}
+            {!isLoading && images.length === 0 && <p className="col-span-full text-center text-slate-400">No images to display for this split/filter.</p>}
+            {!isLoading && images.map(image => (
+                <div key={image.path} className={`bg-slate-700 rounded-lg overflow-hidden shadow-md ${highlightedImages.includes(image.path) ? 'image-selected' : ''}`}>
+                    <img src={image.base64} alt={image.path} className="w-full h-auto cursor-pointer" onClick={() => setSelectedImage(image.path)}/>
+                    <div className="p-2">
+                        <p className="text-sm truncate" title={image.path.split(/[\\/]/).pop()}>{image.path.split(/[\\/]/).pop()}</p>
+                        <p className="text-xs text-slate-400">{image.numLabels} boxes</p>
+                        <div className="flex space-x-2 mt-2">
+                            <button onClick={() => setSelectedImage(image.path)} className="w-full text-sm">Edit</button>
+                            <button onClick={() => toggleHighlight(image.path)} className="w-full text-sm bg-blue-500 hover:bg-blue-400">Select</button>
+                        </div>
+                    </div>
+                </div>
+            ))}
+        </div>
+      );
+      
+      const AnalyticsPanel = () => {
+          if (isAnalyticsLoading) return <p className="text-slate-400">Loading analytics...</p>;
+          if (analyticsError) return <p className="text-red-400">Error: {analyticsError}</p>;
+          if (analytics) {
+              return (
+                <div className="space-y-4">
+                    {Object.entries(analytics).map(([split, data]) => (
+                        <div key={split} className="bg-slate-800 p-3 rounded-lg">
+                            <h3 className="text-lg font-semibold mb-2">{split.charAt(0).toUpperCase() + split.slice(1)}</h3>
+                            <p>Total Images: {data.total}</p>
+                            <p>0 Boxes: {data.zeroBox}</p>
+                            <p>1 Box: {data.singleBox}</p>
+                            <p>1+ Boxes: {data.multiBox}</p>
+                        </div>
+                    ))}
+                </div>
+              );
+          }
+          return <p className="text-slate-400">Enter a yaml path to see analytics.</p>;
+      }
+
+      return (
+        <div className="container mx-auto p-4">
+          <h1 className="text-3xl font-bold mb-6 text-slate-100">YOLOv8 Dataset Manager</h1>
+          <div className="flex space-x-6">
+            <div className="sidebar w-1/4 p-4 rounded-lg">
+              <h2 className="text-xl font-semibold mb-4">📊 Dataset Analytics</h2>
+              <AnalyticsPanel />
+            </div>
+
+            <div className="main-content w-3/4">
+              <div className="bg-slate-700 p-4 rounded-lg mb-4 flex justify-between items-center">
+                  <div>
+                    <select value={selectedSplit} onChange={(e) => setSelectedSplit(e.target.value)}>
+                      {Object.keys(imageSets).map(split => <option key={split} value={split}>{split.charAt(0).toUpperCase() + split.slice(1)}</option>)}
+                    </select>
+                    <button 
+                        onClick={deleteHighlightedImages} 
+                        className="ml-4 bg-red-500 hover:bg-red-400"
+                        disabled={highlightedImages.length === 0}
+                    >
+                        Delete Selected ({highlightedImages.length})
+                    </button>
+                  </div>
+                <div className="flex space-x-4">
+                  <label className="flex items-center space-x-2"><input type="radio" value="Annotated" checked={viewMode === 'Annotated'} onChange={() => setViewMode('Annotated')}/> <span>Annotated</span></label>
+                  <label className="flex items-center space-x-2"><input type="radio" value="Background" checked={viewMode === 'Background'} onChange={() => setViewMode('Background')}/> <span>Background</span></label>
+                </div>
+              </div>
+              
+              <Pagination onTop={true} />
+              
+              {selectedImage ? (
+                <div>
+                  <h2 className="text-xl font-semibold mb-2">📝 Annotation Editor</h2>
+                   <div className="flex items-center space-x-4 bg-slate-800 p-2 rounded-lg mb-2">
+                        <span>Current Class:</span>
+                        <select value={currentClassId} onChange={(e) => setCurrentClassId(parseInt(e.target.value))}>
+                            {Object.entries(classNames).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+                        </select>
+                        <button onClick={() => setIsDrawingToolActive(!isDrawingToolActive)} className={isDrawingToolActive ? 'bg-pink-500' : 'bg-gray-500'}>
+                            {isDrawingToolActive ? 'Drawing On' : 'Drawing Off'}
+                        </button>
+                        <button onClick={deleteSelectedAnnotation} className="bg-red-500 hover:bg-red-400">Delete Selected Box</button>
+                    </div>
+                  <div className="flex justify-center bg-slate-900 p-2 rounded-lg">
+                    <canvas ref={canvasRef}></canvas>
+                  </div>
+                  <div className="flex mt-4 space-x-4">
+                    <button onClick={saveAnnotations}>Save Annotations</button>
+                    <button onClick={() => setSelectedImage(null)} className="bg-slate-600 hover:bg-slate-500">Back to Grid</button>
+                  </div>
+                </div>
+              ) : (
+                <ImageGrid />
+              )}
+
+              <Pagination />
+
+              <div className="mt-8 bg-slate-700 p-4 rounded-lg">
+                 <h2 className="text-xl font-semibold mb-4">🧪 Model Tester</h2>
+                <div className="flex space-x-4">
+                    <input type="text" value={modelPath} onChange={(e) => setModelPath(e.target.value)} placeholder="Path to .pt model" className="flex-grow"/>
+                    <input type="text" value={searchImageName} onChange={(e) => setSearchImageName(e.target.value)} onKeyDown={runInference} placeholder="Image name, then press Enter" className="flex-grow"/>
+                </div>
+                {inferenceResult && (
+                    <div className="mt-4">
+                        <h3 className="text-lg font-semibold mb-2">Inference Result</h3>
+                        <img src={inferenceResult} alt="Inference result" className="w-full h-auto"/>
+                    </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    const root = createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>

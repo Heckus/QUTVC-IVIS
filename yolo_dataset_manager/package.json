@@ -1,0 +1,14 @@
+{
+  "name": "yolo-dataset-manager",
+  "version": "1.0.0",
+  "dependencies": {
+    "express": "^4.18.2",
+    "js-yaml": "^4.1.0",
+    "canvas": "^2.11.2",
+    "node-cache": "^5.1.2",
+    "cors": "^2.8.5"
+  },
+  "scripts": {
+    "start": "node server.js"
+  }
+}

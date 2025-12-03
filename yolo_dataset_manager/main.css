@@ -1,0 +1,68 @@
+/* Dark Theme Variables */
+:root {
+    --bg-color: #1f2937; /* slate-800 */
+    --bg-secondary-color: #374151; /* slate-700 */
+    --bg-tertiary-color: #4b5563; /* slate-600 */
+    --text-color: #d1d5db; /* slate-300 */
+    --text-muted-color: #9ca3af; /* slate-400 */
+    --border-color: #4b5563; /* slate-600 */
+    --accent-color: #f472b6; /* pink-400 */
+    --accent-hover-color: #fb7185; /* rose-400 */
+}
+
+body {
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    font-family: sans-serif;
+}
+
+.container {
+  max-width: 95vw;
+}
+
+canvas {
+  border: 1px solid var(--border-color);
+  border-radius: 0.25rem;
+}
+
+/* Custom styles for UI components */
+.sidebar {
+    background-color: var(--bg-secondary-color);
+    border-right: 1px solid var(--border-color);
+}
+
+.main-content {
+    background-color: var(--bg-color);
+}
+
+select, input[type="text"] {
+    background-color: var(--bg-tertiary-color);
+    border: 1px solid var(--border-color);
+    color: var(--text-color);
+    padding: 0.5rem;
+    border-radius: 0.25rem;
+}
+
+button {
+    background-color: var(--accent-color);
+    color: var(--bg-color);
+    font-weight: bold;
+    padding: 0.5rem 1rem;
+    border-radius: 0.25rem;
+    transition: background-color 0.2s;
+}
+
+button:hover {
+    background-color: var(--accent-hover-color);
+}
+
+button:disabled {
+    background-color: var(--bg-tertiary-color);
+    color: var(--text-muted-color);
+    cursor: not-allowed;
+}
+
+.image-selected {
+    outline: 3px solid var(--accent-color);
+    box-shadow: 0 0 15px var(--accent-color);
+}
