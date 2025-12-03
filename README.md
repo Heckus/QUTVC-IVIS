@@ -1,8 +1,4 @@
-Here is the corrected and formatted raw Markdown code. I have standardized the headers, fixed the indentation in the lists, added syntax highlighting to the code blocks, and cleaned up the file structure section for better readability.
 
-You can copy the block below directly into your `README.md` file.
-
-````markdown
 # QUT Volleyball Club: Computer Vision & Analytics
 
 **A robust computer vision suite for detecting, tracking, and analyzing volleyballs in match footage.**
@@ -130,5 +126,3 @@ This project is maintained by the Queensland University of Technology Volleyball
 
 **Happy Spiking\! 🏐**
 
-```
-```
