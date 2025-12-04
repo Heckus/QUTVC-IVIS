@@ -1,162 +1,229 @@
-# merge_multiple_datasets.py
-
-"""
-Example Usage:
-python merge_multiple_datasets.py \
-    --datasets ../ball_dataset/data.yaml ../actions_dataset/data.yaml ../another_dataset/data.yaml \
-    --output ./final_merged_dataset
-"""
-
 import os
 import yaml
 import shutil
-from tqdm import tqdm
 import argparse
+import random
+from tqdm import tqdm
+from pathlib import Path
 
-def get_full_path(yaml_path, relative_path):
-    """Constructs an absolute path from a YAML file's location and a relative path within it."""
-    base_dir = os.path.dirname(os.path.abspath(yaml_path))
-    return os.path.join(base_dir, relative_path)
+# --- Configuration ---
+IMG_FORMATS = {'.bmp', '.jpg', '.jpeg', '.png', '.tif', '.tiff', '.dng', '.webp', '.mpo'}
 
-def process_and_copy_files(split_path, dest_dir, class_map, dataset_prefix):
+def load_yaml(path):
+    with open(path, 'r') as f:
+        return yaml.safe_load(f)
+
+def get_image_files(path):
+    """Recursively find all images in a directory."""
+    path = Path(path)
+    files = []
+    if path.is_file():
+        if path.suffix.lower() in IMG_FORMATS:
+            files.append(path)
+    elif path.is_dir():
+        for p in path.rglob('*'):
+            if p.is_file() and p.suffix.lower() in IMG_FORMATS:
+                files.append(p)
+    return files
+
+def process_dataset_files(image_files, dest_img_dir, dest_lbl_dir, class_map, prefix):
     """
-    Copies images and re-indexes label files for a given data split (train/valid).
-
-    Args:
-        split_path (str): The source path for the images in the split.
-        dest_dir (str): The destination directory for the split (e.g., './merged_dataset/train').
-        class_map (dict): A mapping from old class indices to new ones.
-        dataset_prefix (str): A unique prefix to add to filenames to avoid overwrites.
+    Copies images and creates re-mapped label files.
     """
-    if not os.path.exists(split_path):
-        print(f"Warning: Source path not found, skipping: {split_path}")
-        return 0
+    for src_img_path in image_files:
+        # Define paths
+        src_img_path = Path(src_img_path)
+        
+        # Determine label path (YOLO standard: replace /images/ with /labels/ and ext with .txt)
+        # We try a few common locations for the label file
+        possible_label_dirs = [
+            src_img_path.parent.parent / 'labels',  # standard yolo (.../dataset/images/file.jpg -> .../dataset/labels/file.txt)
+            src_img_path.parent / 'labels',         # adjacent folder
+            src_img_path.parent                     # same folder
+        ]
+        
+        src_lbl_path = None
+        for p in possible_label_dirs:
+            candidate = p / (src_img_path.stem + '.txt')
+            if candidate.exists():
+                src_lbl_path = candidate
+                break
+        
+        # New Names
+        new_filename = f"{prefix}_{src_img_path.name}"
+        dest_img_path = dest_img_dir / new_filename
+        dest_lbl_path = dest_lbl_dir / (Path(new_filename).stem + ".txt")
 
-    image_dir = split_path
-    label_dir = split_path.replace('images', 'labels')
+        # 1. Copy Image
+        shutil.copy2(src_img_path, dest_img_path)
 
-    dest_image_dir = os.path.join(dest_dir, 'images')
-    dest_label_dir = os.path.join(dest_dir, 'labels')
-    os.makedirs(dest_image_dir, exist_ok=True)
-    os.makedirs(dest_label_dir, exist_ok=True)
-
-    image_files = [f for f in os.listdir(image_dir) if f.endswith(('.jpg', '.jpeg', '.png'))]
-    copied_count = 0
-
-    for image_name in tqdm(image_files, desc=f"Processing {os.path.basename(dest_dir)} from {dataset_prefix}"):
-        source_image_path = os.path.join(image_dir, image_name)
-        label_name = os.path.splitext(image_name)[0] + '.txt'
-        source_label_path = os.path.join(label_dir, label_name)
-
-        if not os.path.exists(source_label_path):
-            continue
-
-        new_image_name = f"{dataset_prefix}_{image_name}"
-        new_label_name = f"{dataset_prefix}_{label_name}"
-
-        shutil.copy(source_image_path, os.path.join(dest_image_dir, new_image_name))
-
+        # 2. Process Label (if exists)
         new_lines = []
-        with open(source_label_path, 'r') as f:
-            for line in f:
-                parts = line.strip().split()
-                if len(parts) == 5:
-                    old_index = int(parts[0])
-                    new_index = class_map.get(old_index)
-                    if new_index is not None:
-                        new_line = f"{new_index} {' '.join(parts[1:])}"
-                        new_lines.append(new_line)
-
+        if src_lbl_path and src_lbl_path.exists():
+            with open(src_lbl_path, 'r') as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) >= 5: # class x y w h
+                        old_idx = int(parts[0])
+                        # Remap index
+                        if old_idx in class_map:
+                            new_idx = class_map[old_idx]
+                            new_lines.append(f"{new_idx} {' '.join(parts[1:])}")
+        
+        # 3. Write Label File (Always write, even if empty, to confirm it's a checked image)
+        # Note: Some trainers prefer no file for background, some prefer empty file. 
+        # Writing an empty file is generally safer for tracking.
         if new_lines:
-            dest_label_path = os.path.join(dest_label_dir, new_label_name)
-            with open(dest_label_path, 'w') as f:
+            with open(dest_lbl_path, 'w') as f:
                 f.write('\n'.join(new_lines))
-            copied_count += 1
-            
-    return copied_count
-
-def get_class_names_from_config(names_field):
-    """Safely extracts class name strings from either a list or a dictionary."""
-    if isinstance(names_field, dict):
-        return list(names_field.values())
-    elif isinstance(names_field, list):
-        return names_field
-    return []
+        # If no lines, we don't strictly need to write the file for YOLOv8 (it infers bg), 
+        # but creating an empty file explicitly defines it as a negative sample.
+        elif not src_lbl_path:
+             with open(dest_lbl_path, 'w') as f:
+                pass # Empty file for background image
 
 def main(args):
-    # --- 1. Load All YAML files ---
-    data_configs = []
-    all_original_names = []
-    for yaml_path in args.datasets:
-        try:
-            with open(yaml_path, 'r') as f:
-                config = yaml.safe_load(f)
-                data_configs.append(config)
-                all_original_names.append(get_class_names_from_config(config['names']))
-        except Exception as e:
-            print(f"Error reading or parsing YAML file {yaml_path}: {e}")
-            return
-
-    # --- 2. Create the master class list ---
-    master_class_set = set()
-    for names_list in all_original_names:
-        master_class_set.update(names_list)
-    master_class_list = sorted(list(master_class_set))
+    print(f"--- Starting Merge of {len(args.datasets)} Datasets ---")
     
-    print("--- Master Class List ---")
-    for i, name in enumerate(master_class_list):
-        print(f"{i}: {name}")
-    print("-------------------------")
-
-    # --- 3. Create class mappings for each dataset ---
-    class_mappings = []
-    for names_list in all_original_names:
-        class_map = {old_idx: master_class_list.index(name) for old_idx, name in enumerate(names_list)}
-        class_mappings.append(class_map)
-
-    # --- 4. Create Output Directories ---
-    output_dir = args.output
-    os.makedirs(os.path.join(output_dir, 'train'), exist_ok=True)
-    os.makedirs(os.path.join(output_dir, 'valid'), exist_ok=True)
-
-    # --- 5. Process and copy files for all datasets ---
-    for i, yaml_path in enumerate(args.datasets):
-        data_config = data_configs[i]
-        class_map = class_mappings[i]
+    # 1. Gather all configs and build Master Class List
+    configs = []
+    all_class_names = set()
+    
+    # Read all YAMLs first to unify classes
+    for yaml_path in args.datasets:
+        cfg = load_yaml(yaml_path)
+        configs.append({'path': Path(yaml_path), 'cfg': cfg})
         
-        print(f"\n--- Processing Dataset {i+1}: {os.path.basename(yaml_path)} ---")
-        prefix = os.path.splitext(os.path.basename(yaml_path))[0]
+        # Handle dictionary or list format for names
+        names = cfg.get('names', {})
+        if isinstance(names, dict):
+            names = names.values()
         
-        train_path = get_full_path(yaml_path, data_config['train'])
-        valid_path = get_full_path(yaml_path, data_config.get('val', data_config['train'])) # Use train if val not specified
-        
-        process_and_copy_files(train_path, os.path.join(output_dir, 'train'), class_map, prefix)
-        process_and_copy_files(valid_path, os.path.join(output_dir, 'valid'), class_map, prefix)
+        # Normalize to lowercase to avoid 'Ball' vs 'ball' conflicts
+        for n in names:
+            all_class_names.add(str(n).lower())
 
-    # --- 6. Create the final merged YAML file ---
-    final_yaml_path = os.path.join(output_dir, 'data.yaml')
-    names_dict = {i: name for i, name in enumerate(master_class_list)}
+    # Create Master List (sorted for consistency)
+    master_classes = sorted(list(all_class_names))
+    print(f"\nMaster Class List ({len(master_classes)} classes): {master_classes}")
+
+    # 2. Prepare Output Directories
+    out_dir = Path(args.output)
+    if out_dir.exists():
+        print(f"Warning: Output directory {out_dir} already exists.")
+        # Optional: shutil.rmtree(out_dir)
+    
+    dirs = {
+        'train': {'images': out_dir / 'train' / 'images', 'labels': out_dir / 'train' / 'labels'},
+        'val':   {'images': out_dir / 'valid' / 'images', 'labels': out_dir / 'valid' / 'labels'}
+    }
+    
+    for split in dirs:
+        for dtype in dirs[split]:
+            dirs[split][dtype].mkdir(parents=True, exist_ok=True)
+
+    # 3. Collect ALL data (Images + Mappings)
+    # We gather everything into a list first, then shuffle and split globally.
+    all_data_entries = [] # Stores tuples: (image_path, class_map, prefix)
+
+    for entry in configs:
+        yaml_path = entry['path']
+        cfg = entry['cfg']
+        prefix = yaml_path.stem # e.g. "video1_data"
+        
+        # Build local->master mapping
+        local_names = cfg.get('names', {})
+        local_map = {} # old_id -> new_id
+        
+        if isinstance(local_names, list):
+            for idx, name in enumerate(local_names):
+                if str(name).lower() in master_classes:
+                    local_map[idx] = master_classes.index(str(name).lower())
+        elif isinstance(local_names, dict):
+            for idx, name in local_names.items():
+                if str(name).lower() in master_classes:
+                    local_map[int(idx)] = master_classes.index(str(name).lower())
+
+        # Find image folders
+        # We check keys 'train', 'val', and 'test' in the yaml to find where images are
+        keys_to_check = ['train', 'val', 'test']
+        
+        found_images = []
+        yaml_parent = yaml_path.parent
+        
+        for key in keys_to_check:
+            if key in cfg:
+                path_val = cfg[key]
+                # path_val can be a string or list
+                if isinstance(path_val, str):
+                    path_val = [path_val]
+                
+                for p in path_val:
+                    # Resolve path relative to YAML
+                    full_p = (yaml_parent / p).resolve()
+                    found_images.extend(get_image_files(full_p))
+
+        # Add to global list
+        for img_path in found_images:
+            all_data_entries.append({
+                'image': img_path,
+                'map': local_map,
+                'prefix': prefix
+            })
+
+    # 4. Shuffle and Split
+    total_images = len(all_data_entries)
+    print(f"\nCollected {total_images} total images. Shuffling and splitting ({args.split_ratio} train)...")
+    
+    random.seed(42) # Deterministic split
+    random.shuffle(all_data_entries)
+    
+    split_idx = int(total_images * args.split_ratio)
+    train_set = all_data_entries[:split_idx]
+    val_set = all_data_entries[split_idx:]
+    
+    # 5. Process Files
+    def process_batch(dataset, split_name):
+        dest_img = dirs[split_name]['images']
+        dest_lbl = dirs[split_name]['labels']
+        
+        print(f"Processing {split_name} set ({len(dataset)} images)...")
+        for item in tqdm(dataset):
+            process_dataset_files(
+                [item['image']], 
+                dest_img, 
+                dest_lbl, 
+                item['map'], 
+                item['prefix']
+            )
+
+    process_batch(train_set, 'train')
+    process_batch(val_set, 'val')
+
+    # 6. Create Final YAML
+    final_yaml_path = out_dir / 'data.yaml'
+    final_names_map = {i: name for i, name in enumerate(master_classes)}
     
     final_config = {
-        'path': os.path.abspath(output_dir),
+        'path': str(out_dir.absolute()),
         'train': 'train/images',
         'val': 'valid/images',
-        'nc': len(master_class_list),
-        'names': names_dict
+        'nc': len(master_classes),
+        'names': final_names_map
     }
 
     with open(final_yaml_path, 'w') as f:
-        yaml.dump(final_config, f, sort_keys=False, default_flow_style=False)
-        
-    print("\n--- Merging Complete! ---")
-    print(f"Merged dataset created at: {output_dir}")
-    print(f"New master YAML file at: {final_yaml_path}")
+        yaml.dump(final_config, f, sort_keys=False)
 
+    print(f"\n--- Merge Complete ---")
+    print(f"Output: {out_dir}")
+    print(f"Config: {final_yaml_path}")
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Merge multiple YOLOv8 datasets with potentially shared classes.")
-    parser.add_argument('--datasets', nargs='+', required=True, help='A list of paths to the dataset YAML files (e.g., data1.yaml data2.yaml ...).')
-    parser.add_argument('--output', type=str, required=True, help='Path to the output directory for the merged dataset.')
+    parser = argparse.ArgumentParser(description="Merge multiple datasets into one YOLOv8 dataset with auto-splitting.")
+    parser.add_argument('--datasets', nargs='+', required=True, help='List of paths to data.yaml files')
+    parser.add_argument('--output', type=str, required=True, help='Output directory')
+    parser.add_argument('--split-ratio', type=float, default=0.8, help='Ratio of images to use for training (default 0.8)')
     
     args = parser.parse_args()
     main(args)

@@ -202,7 +202,7 @@ if __name__ == '__main__':
     parser.add_argument('--batch', type=int, default=8, help='Batch size.')
     parser.add_argument('--imgsz', type=int, default=640, help='Image size.')
     parser.add_argument('--aug', type=str, default='medium', choices=['light', 'medium', 'heavy', 'none'], help='The augmentation preset to use.')
-    parser.add_argument('--pat', type=str, default='10', choices=['1-10'], help='Stop if no improvement for x epochs.')
+    parser.add_argument('--pat', type=int, default=10, help='Stop if no improvement for x epochs.')
     args = parser.parse_args()
 
     # --- Step 1: Load the YOLO model ---

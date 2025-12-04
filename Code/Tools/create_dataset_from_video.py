@@ -259,7 +259,7 @@ def print_instructions():
 # =============================================================================
 def main(args):
     TARGET_DIMS = (640, 640)
-    YOLO_MODEL = "../models/modeln_ball2.pt" 
+    YOLO_MODEL = "../../models/modeln_ball2.pt" 
     
     print_instructions()
     

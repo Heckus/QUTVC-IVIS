@@ -6,11 +6,19 @@ import math
 # =============================================================================
 # --- COMPONENT 1: MOMENTUM TRACKER (Physics) ---
 # =============================================================================
+# =============================================================================
+# --- COMPONENT 1: MOMENTUM TRACKER (Physics) ---
+# =============================================================================
 class MomentumTracker:
-    def __init__(self, max_history=5, max_ghost_frames=2):
+    def __init__(self, max_history=5, max_ghost_frames=2, max_speed=100):
+        """
+        max_speed: Maximum pixels the ball is allowed to travel in a single frame.
+                   This acts as the radius constraint.
+        """
         self.history = [] 
         self.max_history = max_history
         self.max_ghost_frames = max_ghost_frames
+        self.max_speed = max_speed # <--- NEW PARAMETER
         self.ghost_counter = 0 
         self.last_dims = (50, 50) 
 
@@ -41,10 +49,23 @@ class MomentumTracker:
         if len(self.history) < 2:
             return None
         
+        # 1. Calculate raw velocity vector
         (x1, y1) = self.history[-2]
-        (x2, y2) = self.history[-1]
+        (x2, y2) = self.history[-1] # Last known real position
         dx = x2 - x1
         dy = y2 - y1
+        
+        # 2. Calculate magnitude of the movement (speed)
+        speed = math.sqrt(dx**2 + dy**2)
+        
+        # 3. --- THE FIX: CLAMP VELOCITY ---
+        # If the physics prediction tries to move the ball further than 
+        # max_speed (the radius), cap it at the radius.
+        if speed > self.max_speed:
+            scale = self.max_speed / speed
+            dx *= scale
+            dy *= scale
+            # shape: (we keep the direction, but reduce the distance)
         
         pred_x = int(x2 + dx)
         pred_y = int(y2 + dy)
@@ -53,13 +74,15 @@ class MomentumTracker:
         h_half = self.last_dims[1] // 2
         h_img, w_img = frame_shape[:2]
         
-        p_x1 = max(0, pred_x - w_half)
-        p_y1 = max(0, pred_y - h_half)
-        p_x2 = min(w_img, pred_x + w_half)
-        p_y2 = min(h_img, pred_y + h_half)
+        # Strict clamping to screen boundaries
+        p_x1 = max(0, min(w_img - 1, pred_x - w_half))
+        p_y1 = max(0, min(h_img - 1, pred_y - h_half))
+        p_x2 = max(p_x1 + 1, min(w_img, pred_x + w_half)) 
+        p_y2 = max(p_y1 + 1, min(h_img, pred_y + h_half)) 
         
         self.ghost_counter += 1
         
+        # We append the CLAMPED prediction to history to stabilize future frames
         self.history.append((pred_x, pred_y))
         if len(self.history) > self.max_history:
             self.history.pop(0)
@@ -130,7 +153,7 @@ class IVISDetector:
             
         self.conf = conf
         self.color_det = ColorBlobDetector()
-        self.tracker = MomentumTracker(max_ghost_frames=3)
+        self.tracker = MomentumTracker(max_ghost_frames=2, max_speed=100)
         
         # --- NEW: Gating Threshold ---
         # If the yellow blob is more than this many pixels away from 
@@ -205,6 +228,10 @@ class IVISDetector:
         x1, y1, x2, y2 = result['box']
         color = self.colors.get(result['source'], (0, 255, 0))
         
+        # --- FIX: Ensure box coordinates are valid before drawing ---
+        if x2 <= x1 or y2 <= y1:
+            return frame
+
         if mode == 1: 
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
             label = f"IVIS:{result['source'].upper()}"
@@ -217,8 +244,13 @@ class IVISDetector:
             
         elif mode == 3: 
             cx, cy = result['center']
-            radius = max(x2-x1, y2-y1) // 2
-            cv2.circle(frame, (cx, cy), radius, color, 2)
-            cv2.circle(frame, (cx, cy), 3, (0, 0, 255), -1)
+            # --- FIX: Prevent negative radius ---
+            radius = max(1, max(x2-x1, y2-y1) // 2)
+            
+            try:
+                cv2.circle(frame, (cx, cy), radius, color, 2)
+                cv2.circle(frame, (cx, cy), 3, (0, 0, 255), -1)
+            except Exception:
+                pass # Ignore drawing errors if coordinates are weird
 
         return frame

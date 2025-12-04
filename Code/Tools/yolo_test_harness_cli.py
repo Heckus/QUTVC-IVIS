@@ -25,7 +25,7 @@ CLASSES_TO_DETECT = [0] # Example: [0, 32] for person and sports ball in COCO
 
 # --- Ball Trail Settings ---
 # Set to True to enable the visual trail for the ball
-ENABLE_BALL_TRAIL = True
+ENABLE_BALL_TRAIL = False
 # The class name of the ball in your YOLO model. This MUST match the name in your model's .yaml file.
 # The default for the standard COCO model is "sports ball".
 BALL_CLASS_NAME = "volleyball"
